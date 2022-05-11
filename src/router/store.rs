@@ -1,4 +1,4 @@
-use crate::{state_channel::StateChannel, CacheSettings, Packet, Result};
+use crate::{router::state_channel::StateChannel, CacheSettings, Packet, Result};
 use std::{
     collections::{hash_map::Values, HashMap, VecDeque},
     ops::Deref,

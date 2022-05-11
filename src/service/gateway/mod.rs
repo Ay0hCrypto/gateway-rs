@@ -6,9 +6,11 @@ use helium_proto::{
     gateway_resp_v1,
     services::{self, Channel, Endpoint},
     BlockchainTxnStateChannelCloseV1, BlockchainVarV1, GatewayConfigReqV1, GatewayConfigRespV1,
-    GatewayConfigUpdateReqV1, GatewayPocReqV1, GatewayRegionParamsUpdateReqV1, GatewayRespV1,
-    GatewayRoutingReqV1, GatewayScCloseReqV1, GatewayScFollowReqV1, GatewayScIsActiveReqV1,
-    GatewayScIsActiveRespV1, GatewayValidatorsReqV1, GatewayValidatorsRespV1,
+    GatewayConfigUpdateReqV1, GatewayErrorResp, GatewayPocCheckChallengeTargetReqV1,
+    GatewayPocCheckChallengeTargetRespV1, GatewayPocReqV1, GatewayRegionParamsUpdateReqV1,
+    GatewayRespV1, GatewayRoutingReqV1, GatewayScCloseReqV1, GatewayScFollowReqV1,
+    GatewayScIsActiveReqV1, GatewayScIsActiveRespV1, GatewayValidatorsReqV1,
+    GatewayValidatorsRespV1,
 };
 use rand::{rngs::OsRng, seq::SliceRandom};
 use std::{
@@ -81,6 +83,56 @@ impl Stream for StateChannelFollowService {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.rx).poll_next(cx)
     }
+}
+
+#[derive(Debug)]
+pub struct Challenge {
+    pub challenger: KeyedUri,
+    pub block_hash: Vec<u8>,
+    pub onion_key_hash: Vec<u8>,
+    pub challenger_sig: Vec<u8>,
+    pub height: u64,
+}
+
+impl TryFrom<GatewayRespV1> for Challenge {
+    type Error = Error;
+
+    fn try_from(value: GatewayRespV1) -> Result<Self> {
+        let challenge = value.poc_challenge()?;
+        let challenger = challenge.challenger.as_ref().map_or_else(
+            || Err(Error::custom("missing challenger in challenge")),
+            |c| KeyedUri::try_from(c.clone()),
+        )?;
+        Ok(Self {
+            challenger,
+            block_hash: challenge.block_hash.clone(),
+            onion_key_hash: challenge.onion_key_hash.clone(),
+            height: value.height,
+            challenger_sig: value.signature,
+        })
+    }
+}
+
+impl From<&Challenge> for GatewayPocCheckChallengeTargetReqV1 {
+    fn from(v: &Challenge) -> Self {
+        Self {
+            address: vec![],
+            challengee_sig: vec![],
+            challenger: v.challenger.pubkey.to_vec(),
+            block_hash: v.block_hash.clone(),
+            onion_key_hash: v.onion_key_hash.clone(),
+            height: v.height,
+            notifier: v.challenger.pubkey.to_vec(),
+            notifier_sig: v.challenger_sig.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ChallengeCheck {
+    NotTarget,
+    Target(Vec<u8>),
+    Queued(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +285,39 @@ impl GatewayService {
             streaming: stream.into_inner(),
             verifier: self.uri.pubkey.clone(),
         })
+    }
+
+    pub async fn poc_check_challenge_target(
+        &mut self,
+        keypair: Arc<Keypair>,
+        challenge: &Challenge,
+    ) -> Result<ChallengeCheck> {
+        let mut req = GatewayPocCheckChallengeTargetReqV1::from(challenge);
+        req.address = keypair.public_key().to_vec();
+        req.challengee_sig = req.sign(keypair).await?;
+
+        let resp = self.client.check_challenge_target(req).await?.into_inner();
+        resp.verify(&self.uri.pubkey)?;
+        let height = resp.height();
+        match resp.msg {
+            Some(gateway_resp_v1::Msg::PocCheckTargetResp(
+                GatewayPocCheckChallengeTargetRespV1 { target, onion },
+            )) => {
+                if !target {
+                    return Ok(ChallengeCheck::NotTarget);
+                }
+                Ok(ChallengeCheck::Target(onion))
+            }
+            Some(gateway_resp_v1::Msg::ErrorResp(GatewayErrorResp { error, .. }))
+                if &error == b"queued_poc" =>
+            {
+                Ok(ChallengeCheck::Queued(height))
+            }
+            Some(other) => Err(Error::custom(format!(
+                "invalid validator response {other:?}"
+            ))),
+            None => Err(Error::custom("empty validator response")),
+        }
     }
 
     pub async fn height(&mut self) -> Result<(u64, u64)> {

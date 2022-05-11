@@ -1,13 +1,15 @@
 use crate::{
     error::{Error, StateChannelError},
     gateway,
-    router::{QuePacket, RouterStore, StateChannelEntry},
-    service::router::{RouterService, StateChannelService},
+    router::{
+        state_channel::{check_active, check_active_diff, StateChannel, StateChannelMessage},
+        QuePacket, RouterStore, StateChannelEntry,
+    },
     service::{
         self,
         gateway::{GatewayService, StateChannelFollowService},
+        router::{RouterService, StateChannelService},
     },
-    state_channel::{check_active, check_active_diff, StateChannel, StateChannelMessage},
     Base64, CacheSettings, KeyedUri, Keypair, MsgSign, Packet, Region, Result, TxnFee,
     TxnFeeConfig,
 };
@@ -147,7 +149,7 @@ impl RouterClient {
                         self.region = region;
                         info!(logger, "updated region to {region}" );
                     },
-                    None => warn!(logger, "ignoring closed uplinks channel"),
+                    None => warn!(logger, "ignoring closed message channel"),
                 },
                 gw_message = self.state_channel_follower.next() => match gw_message {
                     Some(Ok(message)) => {

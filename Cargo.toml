@@ -50,6 +50,7 @@ sha2 = "0"
 signature = "*"
 async-trait = "0"
 angry-purple-tiger = "0"
+aes-gcm = "0"
 lorawan = { package = "lorawan", path = "lorawan" }
 exponential-backoff = {git = "https://github.com/yoshuawuyts/exponential-backoff", branch = "master"}
 semtech-udp = { version = ">=0.9.4,<1", default-features=false, features=["server"] }

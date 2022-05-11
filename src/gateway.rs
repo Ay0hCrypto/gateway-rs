@@ -1,4 +1,4 @@
-use crate::{router::dispatcher, Error, Packet, Result, Settings};
+use crate::{dispatcher, Error, Packet, Result, Settings};
 use futures::TryFutureExt;
 use semtech_udp::{
     server_runtime::{Error as SemtechError, Event, UdpRuntime},

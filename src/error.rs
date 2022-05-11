@@ -1,4 +1,4 @@
-use crate::state_channel;
+use crate::router::state_channel;
 use std::net;
 use thiserror::Error;
 
@@ -14,6 +14,8 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("crypto error")]
     CryptoError(#[from] helium_crypto::Error),
+    #[error("onion error")]
+    Onion(aes_gcm::Error),
     #[error("encode error")]
     Encode(#[from] EncodeError),
     #[error("decode error")]
@@ -217,6 +219,12 @@ impl StateChannelError {
 
     pub fn low_balance() -> Error {
         Error::StateChannel(Box::new(Self::LowBalance))
+    }
+}
+
+impl From<aes_gcm::Error> for Error {
+    fn from(v: aes_gcm::Error) -> Self {
+        Self::Onion(v)
     }
 }
 
