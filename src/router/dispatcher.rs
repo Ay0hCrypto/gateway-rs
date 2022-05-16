@@ -9,7 +9,7 @@ use futures::{
     task::{Context, Poll},
     TryFutureExt,
 };
-use helium_proto::BlockchainVarV1;
+use helium_proto::{BlockchainVarV1, GatewayRespV1};
 use http::uri::Uri;
 use slog::{debug, info, o, warn, Logger};
 use slog_scope;
@@ -117,6 +117,58 @@ const GATEWAY_MAX_BLOCK_AGE: Duration = Duration::from_secs(1800); // 30 minutes
 enum GatewayStream {
     Routing,
     Region,
+    Config,
+    Poc,
+}
+
+impl GatewayStream {
+    async fn handle_message(
+        &self,
+        message: &GatewayRespV1,
+        dispatcher: &mut Dispatcher,
+        gateway: &mut GatewayService,
+        shutdown: &triggered::Listener,
+        logger: &Logger,
+    ) {
+        match self {
+            Self::Routing => {
+                dispatcher
+                    .handle_routing_update(gateway, message, shutdown, logger)
+                    .await
+            }
+            Self::Region => dispatcher.handle_region_update(message, logger).await,
+            Self::Poc => unimplemented!(),
+            Self::Config => unimplemented!(),
+        }
+    }
+
+    fn handle_error(&self, err: &Error, logger: &Logger) -> Result {
+        let stream = match self {
+            Self::Routing => "routing",
+            Self::Region => "region",
+            Self::Poc => "poc",
+            Self::Config => "config",
+        };
+        warn!(logger, "gateway {stream} stream error: {err:?}");
+        Ok(())
+    }
+
+    async fn get_stream(
+        &self,
+        dispatcher: &Dispatcher,
+        mut gateway: GatewayService,
+    ) -> Result<service::gateway::Streaming> {
+        match self {
+            Self::Routing => gateway.routing_stream(dispatcher.routing_height).await,
+            Self::Region => {
+                gateway
+                    .region_params_stream(dispatcher.keypair.clone())
+                    .await
+            }
+            Self::Poc => gateway.poc_stream(dispatcher.keypair.clone()).await,
+            Self::Config => gateway.config_stream().await,
+        }
+    }
 }
 
 type GatewayStreams = StreamMap<GatewayStream, service::gateway::Streaming>;
@@ -222,16 +274,21 @@ impl Dispatcher {
         if gateway.is_none() {
             return Ok(None);
         }
-        let mut gateway = gateway.unwrap();
-        let mut routing_gateway = gateway.clone();
-        let routing = routing_gateway.routing(self.routing_height);
-        let region_params = gateway.region_params(self.keypair.clone());
-        match tokio::try_join!(routing, region_params) {
-            Ok((routing, region)) => {
-                let stream_map = StreamMap::from_iter([
-                    (GatewayStream::Routing, routing),
-                    (GatewayStream::Region, region),
-                ]);
+        let gateway = gateway.unwrap();
+
+        let stream_names = [
+            GatewayStream::Routing,
+            GatewayStream::Region,
+            GatewayStream::Config,
+            GatewayStream::Poc,
+        ];
+        let streams = stream_names
+            .iter()
+            .map(|name| name.get_stream(self, gateway.clone()));
+
+        match futures_util::future::try_join_all(streams).await {
+            Ok(streams) => {
+                let stream_map = StreamMap::from_iter(stream_names.into_iter().zip(streams));
                 Ok(Some((gateway, stream_map)))
             }
             Err(err) => {
@@ -262,16 +319,10 @@ impl Dispatcher {
                     return Ok(())
                 },
                 gateway_message = streams.next() => match gateway_message {
-                    Some((gateway_stream, Ok(gateway_message))) => match gateway_stream {
-                        GatewayStream::Routing => self.handle_routing_update(&mut gateway, &gateway_message, &shutdown, logger).await,
-                        GatewayStream::Region => self.handle_region_update(&gateway_message, logger).await,
-                    },
+                    Some((gateway_stream, Ok(gateway_message))) =>
+                        gateway_stream.handle_message(&gateway_message, self, &mut gateway, &shutdown, logger).await,
                     Some((gateway_stream, Err(err))) =>  {
-                        match gateway_stream {
-                            GatewayStream::Routing =>  warn!(logger, "gateway routing stream error: {err:?}"),
-                            GatewayStream::Region =>  warn!(logger, "gateway region stream error: {err:?}"),
-                        }
-                        return Ok(())
+                        return gateway_stream.handle_error(&err, logger);
                     },
                     None => {
                         warn!(logger, "gateway streams closed");

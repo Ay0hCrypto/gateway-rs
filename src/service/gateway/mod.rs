@@ -1,14 +1,14 @@
 use crate::{
     service::{CONNECT_TIMEOUT, RPC_TIMEOUT},
-    Error, KeyedUri, Keypair, MsgSign, MsgVerify, PublicKey, Region, Result,
+    Error, KeyedUri, Keypair, MsgSign, MsgVerify, PublicKey, Result,
 };
 use helium_proto::{
     gateway_resp_v1,
     services::{self, Channel, Endpoint},
     BlockchainTxnStateChannelCloseV1, BlockchainVarV1, GatewayConfigReqV1, GatewayConfigRespV1,
-    GatewayRegionParamsUpdateReqV1, GatewayRespV1, GatewayRoutingReqV1, GatewayScCloseReqV1,
-    GatewayScFollowReqV1, GatewayScFollowStreamedRespV1, GatewayScIsActiveReqV1,
-    GatewayScIsActiveRespV1, GatewayValidatorsReqV1, GatewayValidatorsRespV1, Routing,
+    GatewayConfigUpdateReqV1, GatewayPocReqV1, GatewayRegionParamsUpdateReqV1, GatewayRespV1,
+    GatewayRoutingReqV1, GatewayScCloseReqV1, GatewayScFollowReqV1, GatewayScIsActiveReqV1,
+    GatewayScIsActiveRespV1, GatewayValidatorsReqV1, GatewayValidatorsRespV1,
 };
 use rand::{rngs::OsRng, seq::SliceRandom};
 use std::{
@@ -19,6 +19,9 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
+
+mod response;
+pub(crate) use response::Response;
 
 type GatewayClient = services::gateway::Client<Channel>;
 
@@ -40,48 +43,6 @@ impl Stream for Streaming {
                 Some(Err(err)) => Some(Err(err)),
                 None => None,
             })
-    }
-}
-
-pub(crate) trait Response {
-    fn height(&self) -> u64;
-    fn routings(&self) -> Result<&[Routing]>;
-    fn region(&self) -> Result<Region>;
-    fn state_channel_response(&self) -> Result<&GatewayScFollowStreamedRespV1>;
-}
-
-impl Response for GatewayRespV1 {
-    fn height(&self) -> u64 {
-        self.height
-    }
-
-    fn routings(&self) -> Result<&[Routing]> {
-        match &self.msg {
-            Some(gateway_resp_v1::Msg::RoutingStreamedResp(routings)) => Ok(&routings.routings),
-            msg => Err(Error::custom(
-                format!("Unexpected gateway message {msg:?}",),
-            )),
-        }
-    }
-
-    fn region(&self) -> Result<Region> {
-        match &self.msg {
-            Some(gateway_resp_v1::Msg::RegionParamsStreamedResp(params)) => {
-                Region::from_i32(params.region)
-            }
-            msg => Err(Error::custom(
-                format!("Unexpected gateway message {msg:?}",),
-            )),
-        }
-    }
-
-    fn state_channel_response(&self) -> Result<&GatewayScFollowStreamedRespV1> {
-        match &self.msg {
-            Some(gateway_resp_v1::Msg::FollowStreamedResp(res)) => Ok(res),
-            msg => Err(Error::custom(
-                format!("Unexpected gateway message {msg:?}",),
-            )),
-        }
     }
 }
 
@@ -165,7 +126,7 @@ impl GatewayService {
         }
     }
 
-    pub async fn routing(&mut self, height: u64) -> Result<Streaming> {
+    pub async fn routing_stream(&mut self, height: u64) -> Result<Streaming> {
         let stream = self.client.routing(GatewayRoutingReqV1 { height }).await?;
         Ok(Streaming {
             streaming: stream.into_inner(),
@@ -173,7 +134,7 @@ impl GatewayService {
         })
     }
 
-    pub async fn region_params(&mut self, keypair: Arc<Keypair>) -> Result<Streaming> {
+    pub async fn region_params_stream(&mut self, keypair: Arc<Keypair>) -> Result<Streaming> {
         let mut req = GatewayRegionParamsUpdateReqV1 {
             address: keypair.public_key().to_vec(),
             signature: vec![],
@@ -249,6 +210,29 @@ impl GatewayService {
             Some(other) => Err(Error::custom(format!("invalid config response {other:?}"))),
             None => Err(Error::custom("empty config response")),
         }
+    }
+
+    pub async fn config_stream(&mut self) -> Result<Streaming> {
+        let req = GatewayConfigUpdateReqV1 {};
+        let stream = self.client.config_update(req).await?;
+        Ok(Streaming {
+            streaming: stream.into_inner(),
+            verifier: self.uri.pubkey.clone(),
+        })
+    }
+
+    pub async fn poc_stream(&mut self, keypair: Arc<Keypair>) -> Result<Streaming> {
+        let mut req = GatewayPocReqV1 {
+            address: keypair.public_key().to_vec(),
+            signature: vec![],
+        };
+        req.signature = req.sign(keypair).await?;
+
+        let stream = self.client.stream_poc(req).await?;
+        Ok(Streaming {
+            streaming: stream.into_inner(),
+            verifier: self.uri.pubkey.clone(),
+        })
     }
 
     pub async fn height(&mut self) -> Result<(u64, u64)> {

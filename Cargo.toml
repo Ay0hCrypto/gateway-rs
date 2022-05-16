@@ -27,6 +27,7 @@ http-serde = "1"
 tokio = { version = "1", default-features=false, features=["fs", "macros", "signal", "rt", "process", "time"] }
 tokio-stream = {version = "0", features = ["fs"] }
 futures = "*"
+futures-util = "*"
 triggered = "0.1"
 slog = "2"
 slog-async = "2"
