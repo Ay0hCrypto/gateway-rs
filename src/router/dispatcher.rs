@@ -137,7 +137,7 @@ impl GatewayStream {
                     .await
             }
             Self::Region => dispatcher.handle_region_update(message, logger).await,
-            Self::Poc => unimplemented!(),
+            Self::Poc => dispatcher.handle_poc_challenge(message, logger).await,
             Self::Config => unimplemented!(),
         }
     }
@@ -454,6 +454,19 @@ impl Dispatcher {
                         let _ = router_entry.dispatch.uplink(packet.clone()).await;
                     }
                 }
+            }
+        }
+    }
+
+    async fn handle_poc_challenge<R: service::gateway::Response>(
+        &mut self,
+        response: &R,
+        logger: &Logger,
+    ) {
+        match response.poc_challenge() {
+            Ok(challenge) => info!(logger, "RECEIVED CHALLENG {:?}", challenge),
+            Err(err) => {
+                warn!(logger, "error decoding poc challenge: {err:?}");
             }
         }
     }
