@@ -15,7 +15,7 @@ pub enum Error {
     #[error("crypto error")]
     CryptoError(#[from] helium_crypto::Error),
     #[error("onion error")]
-    Onion(aes_gcm::Error),
+    Onion(OnionError),
     #[error("encode error")]
     Encode(#[from] EncodeError),
     #[error("decode error")]
@@ -78,6 +78,16 @@ pub enum ServiceError {
     Check { block_age: u64, max_age: u64 },
     #[error("Unable to connect to local server. Check that `helium_gateway` is running.")]
     LocalClientConnect(helium_proto::services::Error),
+}
+
+#[derive(Error, Debug)]
+pub enum OnionError {
+    #[error("invalid onion size")]
+    InvalidSize(usize),
+    #[error("invalid onion key")]
+    InvalidKey,
+    #[error("decrypt failure")]
+    CryptoError,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -222,9 +232,17 @@ impl StateChannelError {
     }
 }
 
-impl From<aes_gcm::Error> for Error {
-    fn from(v: aes_gcm::Error) -> Self {
-        Self::Onion(v)
+impl OnionError {
+    pub fn invalid_size(seen: usize) -> Error {
+        Error::Onion(OnionError::InvalidSize(seen))
+    }
+
+    pub fn invalid_key() -> Error {
+        Error::Onion(OnionError::InvalidKey)
+    }
+
+    pub fn crypto_error() -> Error {
+        Error::Onion(OnionError::CryptoError)
     }
 }
 

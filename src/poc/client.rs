@@ -113,7 +113,7 @@ impl PoCClient {
             // hasn't started processing the challenge block yet, then cache
             // the check target req it will then be retried periodically
             Ok(ChallengeCheck::Queued(challenger_height))
-                if challenge.height - challenger_height >= 0 =>
+                if challenge.height >= challenger_height =>
             {
                 let onion_key_hash = challenge.onion_key_hash.clone();
                 if self
